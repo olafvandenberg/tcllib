@@ -7,10 +7,10 @@
 ###
 #tool mirror http://core.tcl.tk/tcllib 
 #tool mirror http://fossil.etoyoc.com/fossil/tcllib
-my variable tool_root
 ###
 # Populate the branches
 ###
+my meta set installer: sak
 my release add trunk {
   distribution: official
   checkout: trunk
