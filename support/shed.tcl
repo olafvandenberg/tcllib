@@ -10,8 +10,8 @@
 ###
 # Populate the branches
 ###
-my meta set name: tcllib
-my meta set installer: sak
+my shed set name: tcllib
+my shed set installer: sak
 my release add trunk {
   distribution: official
   checkout: trunk
@@ -34,5 +34,5 @@ foreach file [glob [file join $::TOOL_ROOT apps *]] {
 # Build the module section
 ###
 foreach path [glob [file join $::TOOL_ROOT modules *]] {
-  my module scan [file tail $path] $path
+  my module scan $path
 }
