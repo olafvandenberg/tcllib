@@ -2,7 +2,11 @@ Your test server works!
 
 * [Tcllib embedded docs](/tcllib/index.html)
 * [Tcllib's fossil repo (hosted via SCGI)](/fossil)
-* [Tcllib's fossil repo (hosted via proxy)](/proxy)
+* [Standard Markdown Example Page](example.md)
+* [Static HTML Page](html_static_page.html)
+
+A locally served image:
+![Locally Served Image](/tcllib/image/arch_core_container.png "Core Container")
 
 Internal documentation for httpd:
 
