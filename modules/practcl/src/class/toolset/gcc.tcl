@@ -1,6 +1,6 @@
 
-::oo::class create ::practcl::build.gcc {
-  superclass ::practcl::build
+::oo::class create ::practcl::toolset.gcc {
+  superclass ::practcl::toolset
 
   method build-compile-sources {PROJECT COMPILE {CPPCOMPILE {}}} {
   set EXTERN_OBJS {}
@@ -264,6 +264,7 @@ $proj(CFLAGS_WARNING) $INCLUDES $defs"
 method build-tclsh {outfile PROJECT} {
   puts " BUILDING STATIC TCLSH "
   set TCLOBJ [$PROJECT project TCLCORE]
+  ::practcl::toolset select $TCLOBJ
   set PKG_OBJS {}
   foreach item [$PROJECT link list core.library] {
     if {[string is true [$item define get static]]} {
@@ -282,6 +283,7 @@ method build-tclsh {outfile PROJECT} {
     set TKOBJ ::noop
     $PROJECT define set static_tk 0
   } else {
+    ::practcl::toolset select $TKOBJ
     array set TK  [$TKOBJ config.sh]
     set do_tk [$TKOBJ define get static]
     $PROJECT define set static_tk $do_tk
