@@ -1,9 +1,9 @@
-namespace eval ::clay {}
+namespace eval ::practcl {}
 
 ###
 # Concatenate a file
 ###
-proc ::clay::cat fname {
+proc ::practcl::cat fname {
     if {![file exists $fname]} {
        return
     }
@@ -18,7 +18,7 @@ proc ::clay::cat fname {
 # prevent the documentation markup comments from clogging
 # up files intended for distribution in machine readable format.
 ###
-proc ::clay::docstrip text {
+proc ::practcl::docstrip text {
   set result {}
   foreach line [split $text \n] {
     append thisline $line \n
@@ -31,15 +31,15 @@ proc ::clay::docstrip text {
     if {[string index [string trim $outline] 0] eq "#"} continue
     set cmd [string trim [lindex $outline 0] :]
     if {$cmd eq "namespace" && [lindex $outline 1] eq "eval"} {
-      append result [list {*}[lrange $outline 0 end-1] [docstrip [lindex $outline end]]] \n
+      append result [list {*}[lrange $outline 0 end-1]] " " \{ \n [docstrip [lindex $outline end]]\} \n
       continue
     }
     if {[string match "*::define" $cmd] && [llength $outline]==3} {
-      append result [list {*}[lrange $outline 0 end-1] [docstrip [lindex $outline end]]] \n
+      append result [list {*}[lrange $outline 0 end-1]] " " \{ \n [docstrip [lindex $outline end]]\} \n
       continue
     }
     if {$cmd eq "oo::class" && [lindex $outline 1] eq "create"} {
-      append result [list {*}[lrange $outline 0 end-1] [docstrip [lindex $outline end]]] \n
+      append result [list {*}[lrange $outline 0 end-1]] " " \{ \n [docstrip [lindex $outline end]]\} \n
       continue
     }
     append result $outline
@@ -77,24 +77,24 @@ proc ::putb {buffername args} {
 #   {Tom RichardHarry} {tomdickharry@illustrius.edu}
 # }
 # # Create the object
-# ::clay::doctool create AutoDoc
+# ::practcl::doctool create AutoDoc
 # set fout [open [file join $moddir module.tcl] w]
 # foreach file [glob [file join $srcdir *.tcl]] {
-#   set content [::clay::cat [file join $srcdir $file]]
+#   set content [::practcl::cat [file join $srcdir $file]]
 #    # Scan the file
 #    AutoDoc scan_text $content
 #    # Strip the comments from the distribution
-#    puts $fout [::clay::docstrip $content]
+#    puts $fout [::practcl::docstrip $content]
 # }
 # # Write out the manual page
 # set manout [open [file join $moddir module.man] w]
-# dict set arglist header [string map $modmap [::clay::cat [file join $srcdir manual.txt]]]
-# dict set arglist footer [string map $modmap [::clay::cat [file join $srcdir footer.txt]]]
+# dict set arglist header [string map $modmap [::practcl::cat [file join $srcdir manual.txt]]]
+# dict set arglist footer [string map $modmap [::practcl::cat [file join $srcdir footer.txt]]]
 # dict set arglist authors $authors
 # puts $manout [AutoDoc manpage {*}$arglist]
 # close $manout
 ###
-oo::class create ::clay::doctool {
+oo::class create ::practcl::doctool {
   constructor {} {
     my reset
   }
@@ -350,7 +350,7 @@ oo::class create ::clay::doctool {
   ###
   # Process a proc statement
   ###
-  method keyword.proc {commentblock name arglist body} {
+  method keyword.proc {commentblock name arglist} {
     set info [my comment $commentblock]
     if {![dict exists $info arglist]} {
       dict set info arglist [my arglist $arglist]
@@ -394,9 +394,10 @@ oo::class create ::clay::doctool {
       }
       set cmd [string trim [lindex $thisline 0] ":"]
       switch $cmd {
+        PROC -
         Proc -
         proc {
-          set procinfo [my keyword.proc $commentblock {*}[lrange $thisline 1 end]]
+          set procinfo [my keyword.proc $commentblock {*}[lrange $thisline 1 2]]
           dict set info proc [string trim [lindex $thisline 1] :] $procinfo
           set commentblock {}
         }
