@@ -8,7 +8,7 @@
 #
 
 package require Tcl 8.3
-package require mime 1.7-
+package require mime 1.4.1
 
 catch {
     package require SASL 1.0;           # tcllib 1.8
@@ -101,8 +101,6 @@ if {[catch {package require Trf  2.0}]} {
 #                          some reason. Return 'insecure' to continue with
 #                          normal SMTP or 'secure' to close the connection and
 #                          try another server.
-#             -tlsimport   after a succesfull socket command, import tls on
-#                          channel - used for native smtps negotiation
 #             -username    These are needed if your SMTP server requires
 #             -password    authentication.
 #
@@ -131,7 +129,6 @@ proc ::smtp::sendmessage {part args} {
     set ports [list 25]
     set tlsP 1
     set tlspolicy {}
-    set tlsimport 0
     set username {}
     set password {}
 
@@ -157,7 +154,6 @@ proc ::smtp::sendmessage {part args} {
             -queue      {set queueP [boolean $value]}
             -usetls     {set tlsP   [boolean $value]}
             -tlspolicy  {set tlspolicy $value}
-            -tlsimport  {set tlsimport [boolean $value]}
 	    -maxsecs    {set maxsecs [expr {$value < 0 ? 0 : $value}]}
             -header {
                 if {[llength $value] != 2} {
@@ -386,14 +382,14 @@ proc ::smtp::sendmessage {part args} {
     # the message-id.
 
     if {([lsearch -exact $lowerL $dateL] < 0) \
-            && ([catch {::mime::header get $part $dateL}])} {
+            && ([catch { ::mime::getheader $part $dateL }])} {
         lappend lowerL $dateL
         lappend mixedL $dateM
         lappend header($dateL) [::mime::parsedatetime -now proper]
     }
 
     if {([lsearch -exact $lowerL ${message-idL}] < 0) \
-            && ([catch {::mime::header get $part ${message-idL}}])} {
+            && ([catch { ::mime::getheader $part ${message-idL} }])} {
         lappend lowerL ${message-idL}
         lappend mixedL ${message-idM}
         lappend header(${message-idL}) [::mime::uniqueID]
@@ -402,13 +398,12 @@ proc ::smtp::sendmessage {part args} {
 
     # Get all the headers from the MIME object and save them so that they can
     # later be restored.
-    set savedH [::mime::header get $part]
-    puts [list crackle $savedH]
+    set savedH [::mime::getheader $part]
 
     # Take all the headers defined earlier and add them to the MIME message.
     foreach lower $lowerL mixed $mixedL {
         foreach value $header($lower) {
-            ::mime::header set $part $mixed $value -mode append
+            ::mime::setheader $part $mixed $value -mode append
         }
     }
 
@@ -426,7 +421,7 @@ proc ::smtp::sendmessage {part args} {
 		                -maxsecs $maxsecs -usetls $tlsP \
                                 -multiple $bccP -queue $queueP \
                                 -servers $servers -ports $ports \
-                                -tlspolicy $tlspolicy -tlsimport $tlsimport \
+                                -tlspolicy $tlspolicy \
                                 -username $username -password $password]
 
     if {![string match "::smtp::*" $token]} {
@@ -445,8 +440,8 @@ proc ::smtp::sendmessage {part args} {
 
     if {($code == 0) && ($bccP)} {
         set inner [::mime::initialize -canonical message/rfc822 \
-                                    -headers [list Content-Description \
-                                                  {Original Message}] \
+                                    -header [list Content-Description \
+                                                  "Original Message"] \
                                     -parts [list $part]]
 
         set subject "\[$bccM\]"
@@ -455,15 +450,16 @@ proc ::smtp::sendmessage {part args} {
         }
 
         set outer [::mime::initialize \
-	    -canonical multipart/digest \
-	    -headers [list \
-		From [list $originator {}] \
-		Bcc 
-		Date [::mime::parsedatetime -now proper] \
-		Subject $subject \
-		Message-ID [::mime::uniqueID] \
-		Content-Description {Blind Carbon Copy} \
-	     -parts [list $inner]]
+                         -canonical multipart/digest \
+                         -header [list From $originator] \
+                         -header [list Bcc ""] \
+                         -header [list Date \
+                                       [::mime::parsedatetime -now proper]] \
+                         -header [list Subject $subject] \
+                         -header [list Message-ID [::mime::uniqueID]] \
+                         -header [list Content-Description \
+                                       "Blind Carbon Copy"] \
+                         -parts [list $inner]]
 
 
         set code [catch { sendmessageaux $token $outer \
@@ -504,18 +500,20 @@ proc ::smtp::sendmessage {part args} {
 
     # Destroy SMTP token 'cause we're done with it.
     
-    catch { finalize $token -close $status } copts cres
+    catch { finalize $token -close $status }
 
     # Restore provided MIME object to original state (without the SMTP headers).
     
-    foreach key [::mime::header get $part -names] {
-        mime::header set $part $key "" -mode delete
+    foreach key [::mime::getheader $part -names] {
+        mime::setheader $part $key "" -mode delete
     }
-    foreach {key value} $savedH {
-	::mime::header set $part $key {*}$value -mode append
+    foreach {key values} $savedH {
+        foreach value $values {
+            ::mime::setheader $part $key $value -mode append
+        }
     }
 
-    retuern -options $copts $cres
+    return -code $code -errorinfo $einfo -errorcode $ecode $result
 }
 
 # ::smtp::sendmessageaux --
@@ -597,8 +595,6 @@ proc ::smtp::sendmessageaux {token part originator recipients aloP} {
 #                          the request (one port per server-- defaults to 25).
 #             -usetls      A boolean to indicate we will use TLS if possible.
 #             -tlspolicy   Command called if TLS setup fails.
-#             -tlsimport   after a succesfull socket command, import tls on
-#                          channel - used for native smtps negotiation
 #             -username    These provide the authentication information 
 #             -password    to be used if needed by the SMTP server.
 #
@@ -620,7 +616,6 @@ proc ::smtp::initialize {args} {
     array set options [list -debug 0 -client localhost -multiple 1 \
                             -maxsecs 120 -queue 0 -servers localhost \
                             -ports 25 -usetls 1 -tlspolicy {} \
-                            -tlsimport 0 \
                             -username {} -password {}]
     array set options $args
     set state(options) [array get options]
@@ -628,12 +623,14 @@ proc ::smtp::initialize {args} {
     # Iterate through servers until one accepts a connection (and responds
     # nicely).
    
-    foreach server $options(-servers) port $options(-ports) {
-        if {$server == ""} continue
-
+    set index 0 
+    foreach server $options(-servers) {
 	set state(readable) 0
-        if {$port == ""} { set port 25 }
-        
+        if {[llength $options(-ports)] >= $index} {
+            set port [lindex $options(-ports) $index]
+        } else {
+            set port 25
+        }
         if {$options(-debug)} {
             puts stderr "Trying $server..."
             flush stderr
@@ -645,10 +642,6 @@ proc ::smtp::initialize {args} {
 
         if {[set code [catch {
             set state(sd) [socket -async $server $port]
-            if { $options(-tlsimport) } {
-                package require tls
-                tls::import $state(sd)
-            }
             fconfigure $state(sd) -blocking off -translation binary
             fileevent $state(sd) readable [list ::smtp::readable $token]
         } result]]} {
@@ -681,6 +674,7 @@ proc ::smtp::initialize {args} {
         if {$r != {}} {
             return $r
         }
+        incr index
     }
 
     # None of the servers accepted our connection, so close everything up and
@@ -691,8 +685,6 @@ proc ::smtp::initialize {args} {
 }
 
 # If we cannot load the tls package, ignore the error
-# Result value is a Tcl return code, not a bool.
-# 0 == OK
 proc ::smtp::load_tls {} {
     set r [catch {package require tls}]
     if {$r} {set ::errorInfo ""}
@@ -752,7 +744,7 @@ proc ::smtp::initialize_ehlo {token} {
         if {($options(-usetls)) && ![info exists state(tls)] \
                 && (([lsearch $response(args) STARTTLS] >= 0)
                     || ([lsearch $response(args) TLS] >= 0))} {
-            if {[load_tls] == 0} {
+            if {![load_tls]} {
                 set state(tls) 0
                 if {![catch {smtp::talk $token 300 STARTTLS} resp]} {
                     array set starttls $resp
@@ -768,8 +760,8 @@ proc ::smtp::initialize_ehlo {token} {
                         return [initialize_ehlo $token]
                     } else {
                         # Call a TLS client policy proc here
-                        #  returns secure   - close and try another server.
-                        #  returns insecure - continue on current socket
+                        #  returns secure close and try another server.
+                        #  returns insecure continue on current socket
                         set policy insecure
                         if {$options(-tlspolicy) != {}} {
                             catch {
@@ -1508,7 +1500,7 @@ proc ::smtp::boolean {value} {
 
 # -------------------------------------------------------------------------
 
-package provide smtp 1.5
+package provide smtp 1.4.5
 
 # -------------------------------------------------------------------------
 # Local variables:

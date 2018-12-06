@@ -2,14 +2,13 @@
 #
 # Copyright (c) 1999-2000 Marshall T. Rose
 # Copyright (c) 2003-2006 Pat Thoyts
-# Copyright (c) 2003-2018 Poor Yorick 
 #
 # See the file "license.terms" for information on usage and redistribution
 # of this file, and for a DISCLAIMER OF ALL WARRANTIES.
 #
 
 package require Tcl 8.3
-package require mime 1.7-
+package require mime 1.4.1
 
 catch {
     package require SASL 1.0;           # tcllib 1.8
@@ -102,8 +101,6 @@ if {[catch {package require Trf  2.0}]} {
 #                          some reason. Return 'insecure' to continue with
 #                          normal SMTP or 'secure' to close the connection and
 #                          try another server.
-#             -tlsimport   after a succesfull socket command, import tls on
-#                          channel - used for native smtps negotiation
 #             -username    These are needed if your SMTP server requires
 #             -password    authentication.
 #
@@ -112,6 +109,8 @@ if {[catch {package require Trf  2.0}]} {
 #       exception with an error code and error message.
 
 proc ::smtp::sendmessage {part args} {
+    global errorCode errorInfo
+
     # Here are the meanings of the following boolean variables:
     # aloP -- value of -atleastone option above.
     # debugP -- value of -debug option above.
@@ -130,7 +129,6 @@ proc ::smtp::sendmessage {part args} {
     set ports [list 25]
     set tlsP 1
     set tlspolicy {}
-    set tlsimport 0
     set username {}
     set password {}
 
@@ -156,7 +154,6 @@ proc ::smtp::sendmessage {part args} {
             -queue      {set queueP [boolean $value]}
             -usetls     {set tlsP   [boolean $value]}
             -tlspolicy  {set tlspolicy $value}
-            -tlsimport  {set tlsimport [boolean $value]}
 	    -maxsecs    {set maxsecs [expr {$value < 0 ? 0 : $value}]}
             -header {
                 if {[llength $value] != 2} {
@@ -307,7 +304,7 @@ proc ::smtp::sendmessage {part args} {
 
     # We're done parsing the arguments.
 
-    if {$recipients ne {}} {
+    if {$recipients != ""} {
         set who -recipients
     } elseif {![info exists header($toL)]} {
         error "need -header \"$toM ...\""
@@ -385,14 +382,14 @@ proc ::smtp::sendmessage {part args} {
     # the message-id.
 
     if {([lsearch -exact $lowerL $dateL] < 0) \
-            && ([catch {$part header get $dateL}])} {
+            && ([catch { ::mime::getheader $part $dateL }])} {
         lappend lowerL $dateL
         lappend mixedL $dateM
-        lappend header($dateL) [::mime::datetime -now proper]
+        lappend header($dateL) [::mime::parsedatetime -now proper]
     }
 
     if {([lsearch -exact $lowerL ${message-idL}] < 0) \
-            && ([catch {$part header get ${message-idL}}])} {
+            && ([catch { ::mime::getheader $part ${message-idL} }])} {
         lappend lowerL ${message-idL}
         lappend mixedL ${message-idM}
         lappend header(${message-idL}) [::mime::uniqueID]
@@ -401,12 +398,12 @@ proc ::smtp::sendmessage {part args} {
 
     # Get all the headers from the MIME object and save them so that they can
     # later be restored.
-    set savedH [$part header get]
+    set savedH [::mime::getheader $part]
 
     # Take all the headers defined earlier and add them to the MIME message.
     foreach lower $lowerL mixed $mixedL {
         foreach value $header($lower) {
-            $part header set $mixed $value -mode append
+            ::mime::setheader $part $mixed $value -mode append
         }
     }
 
@@ -424,26 +421,27 @@ proc ::smtp::sendmessage {part args} {
 		                -maxsecs $maxsecs -usetls $tlsP \
                                 -multiple $bccP -queue $queueP \
                                 -servers $servers -ports $ports \
-                                -tlspolicy $tlspolicy -tlsimport $tlsimport \
+                                -tlspolicy $tlspolicy \
                                 -username $username -password $password]
 
-
-    if {![string match ::smtp::* $token]} {
+    if {![string match "::smtp::*" $token]} {
 	# An error occurred and $token contains the error info
 	array set respArr $token
 	return -code error $respArr(diagnostic)
     }
 
-    set code1 [catch {
-	sendmessageaux $token $part $sender $vrecipients $aloP
-    } cres1 copts1]
-    lappend results $code1 $cres1 $copts1
+    set code [catch { sendmessageaux $token $part \
+                                           $sender $vrecipients $aloP } \
+                    result]
+    set ecode $errorCode
+    set einfo $errorInfo
 
-    if {!$code1 && $bccP} {
-	# Send the message to bcc recipients as a MIME attachment.
-        set inner [::mime::.new {} -canonical message/rfc822 \
-                                    -headers [list Content-Description \
-                                                  {Original Message}] \
+    # Send the message to bcc recipients as a MIME attachment.
+
+    if {($code == 0) && ($bccP)} {
+        set inner [::mime::initialize -canonical message/rfc822 \
+                                    -header [list Content-Description \
+                                                  "Original Message"] \
                                     -parts [list $part]]
 
         set subject "\[$bccM\]"
@@ -451,69 +449,71 @@ proc ::smtp::sendmessage {part args} {
             append subject " " [lindex $header(subject) 0] 
         }
 
-        set outer [::mime::.new {} \
-	    -canonical multipart/digest \
-	    -headers [list \
-		From [list $originator {}] \
-		Bcc 
-		Date [::mime::datetime -now proper] \
-		Subject $subject \
-		Message-ID [::mime::uniqueID] \
-		Content-Description {Blind Carbon Copy} \
-	     -parts [list $inner]]]
+        set outer [::mime::initialize \
+                         -canonical multipart/digest \
+                         -header [list From $originator] \
+                         -header [list Bcc ""] \
+                         -header [list Date \
+                                       [::mime::parsedatetime -now proper]] \
+                         -header [list Subject $subject] \
+                         -header [list Message-ID [::mime::uniqueID]] \
+                         -header [list Content-Description \
+                                       "Blind Carbon Copy"] \
+                         -parts [list $inner]]
 
 
-        set code2 [catch {
-	    sendmessageaux $token $outer $sender $brecipients $aloP
-	} cres2 copts2]
+        set code [catch { sendmessageaux $token $outer \
+                                               $sender $brecipients \
+                                               $aloP } result2]
+        set ecode $errorCode
+        set einfo $errorInfo
 
-	lappend results $code2 $cres2 $copts2
+        if {$code == 0} {
+            set result [concat $result $result2]
+        } else {
+            set result $result2
+        }
 
-        catch {$inner .destroy -subordinates none}
-        catch {$outer .destroy -subordinates none}
+        catch { ::mime::finalize $inner -subordinates none }
+        catch { ::mime::finalize $outer -subordinates none }
     }
 
     # Determine if there was any error in prior operations and set errorcodes
     # and error messages appropriately.
+    
+    switch -- $code {
+        0 {
+            set status orderly
+        }
 
-    foreach {code cres copts} $results {
-	# handle just the first one
-	switch -- $code {
-	    0 {
-		set status orderly
-	    }
+        7 {
+            set code 1
+            array set response $result
+            set result "$response(code): $response(diagnostic)"
+            set status abort
+        }
 
-	    7 {
-		dict set copts -code 1
-		set status abort
-		break
-	    }
-
-	    default {
-		set status abort
-		break
-	    }
-	}
-    }
-
-    set code3 [catch {finalize $token -close $status} cres3 copts3]
-
-    if {$code3 && !$code} {
-	lassign [list $cres3 $copts3] cres copts
+        default {
+            set status abort
+        }
     }
 
     # Destroy SMTP token 'cause we're done with it.
-   
+    
+    catch { finalize $token -close $status }
+
     # Restore provided MIME object to original state (without the SMTP headers).
-   
-    foreach {key val} [$part header get] {
-        $part header set $key "" -mode delete
+    
+    foreach key [::mime::getheader $part -names] {
+        mime::setheader $part $key "" -mode delete
     }
-    foreach {key value} $savedH {
-	$part header set $key {*}$value -mode append
+    foreach {key values} $savedH {
+        foreach value $values {
+            ::mime::setheader $part $key $value -mode append
+        }
     }
 
-    return -options $copts $cres
+    return -code $code -errorinfo $einfo -errorcode $ecode $result
 }
 
 # ::smtp::sendmessageaux --
@@ -595,8 +595,6 @@ proc ::smtp::sendmessageaux {token part originator recipients aloP} {
 #                          the request (one port per server-- defaults to 25).
 #             -usetls      A boolean to indicate we will use TLS if possible.
 #             -tlspolicy   Command called if TLS setup fails.
-#             -tlsimport   after a succesfull socket command, import tls on
-#                          channel - used for native smtps negotiation
 #             -username    These provide the authentication information 
 #             -password    to be used if needed by the SMTP server.
 #
@@ -618,7 +616,6 @@ proc ::smtp::initialize {args} {
     array set options [list -debug 0 -client localhost -multiple 1 \
                             -maxsecs 120 -queue 0 -servers localhost \
                             -ports 25 -usetls 1 -tlspolicy {} \
-                            -tlsimport 0 \
                             -username {} -password {}]
     array set options $args
     set state(options) [array get options]
@@ -626,12 +623,14 @@ proc ::smtp::initialize {args} {
     # Iterate through servers until one accepts a connection (and responds
     # nicely).
    
-    foreach server $options(-servers) port $options(-ports) {
-        if {$server == ""} continue
-
+    set index 0 
+    foreach server $options(-servers) {
 	set state(readable) 0
-        if {$port == ""} { set port 25 }
-        
+        if {[llength $options(-ports)] >= $index} {
+            set port [lindex $options(-ports) $index]
+        } else {
+            set port 25
+        }
         if {$options(-debug)} {
             puts stderr "Trying $server..."
             flush stderr
@@ -643,10 +642,6 @@ proc ::smtp::initialize {args} {
 
         if {[set code [catch {
             set state(sd) [socket -async $server $port]
-            if { $options(-tlsimport) } {
-                package require tls
-                tls::import $state(sd)
-            }
             fconfigure $state(sd) -blocking off -translation binary
             fileevent $state(sd) readable [list ::smtp::readable $token]
         } result]]} {
@@ -679,6 +674,7 @@ proc ::smtp::initialize {args} {
         if {$r != {}} {
             return $r
         }
+        incr index
     }
 
     # None of the servers accepted our connection, so close everything up and
@@ -689,8 +685,6 @@ proc ::smtp::initialize {args} {
 }
 
 # If we cannot load the tls package, ignore the error
-# Result value is a Tcl return code, not a bool.
-# 0 == OK
 proc ::smtp::load_tls {} {
     set r [catch {package require tls}]
     if {$r} {set ::errorInfo ""}
@@ -750,7 +744,7 @@ proc ::smtp::initialize_ehlo {token} {
         if {($options(-usetls)) && ![info exists state(tls)] \
                 && (([lsearch $response(args) STARTTLS] >= 0)
                     || ([lsearch $response(args) TLS] >= 0))} {
-            if {[load_tls] == 0} {
+            if {![load_tls]} {
                 set state(tls) 0
                 if {![catch {smtp::talk $token 300 STARTTLS} resp]} {
                     array set starttls $resp
@@ -766,8 +760,8 @@ proc ::smtp::initialize_ehlo {token} {
                         return [initialize_ehlo $token]
                     } else {
                         # Call a TLS client policy proc here
-                        #  returns secure   - close and try another server.
-                        #  returns insecure - continue on current socket
+                        #  returns secure close and try another server.
+                        #  returns insecure continue on current socket
                         set policy insecure
                         if {$options(-tlspolicy) != {}} {
                             catch {
@@ -913,6 +907,7 @@ proc ::smtp::Authenticate {token mechanism} {
 #       throw an exception with the error code and error message.
 
 proc ::smtp::finalize {token args} {
+    global errorCode errorInfo
     # FRINK: nocheck
     variable $token
     upvar 0 $token state
@@ -920,43 +915,43 @@ proc ::smtp::finalize {token args} {
     array set options [list -close orderly]
     array set options $args
 
-    try {
-	switch -- $options(-close) {
-	    orderly {
-		set code [catch { talk $token 120 QUIT } result]
-	    }
+    switch -- $options(-close) {
+        orderly {
+            set code [catch { talk $token 120 QUIT } result]
+        }
 
-	    abort {
-		set code [catch {
-		    talk $token 0 RSET
-		    talk $token 0 QUIT
-		} result]
-	    }
+        abort {
+            set code [catch {
+                talk $token 0 RSET
+                talk $token 0 QUIT
+            } result]
+        }
 
-	    drop {
-		set code 0
-		set result ""
-	    }
+        drop {
+            set code 0
+            set result ""
+        }
 
-	    default {
-		error "unknown value for -close $options(-close)"
-	    }
-	}
-    } finally {
-	if {$state(sd) in [chan names]} {
-	    close $state(sd)
-	}
-
-	if {$state(afterID) ne {}} {
-	    after cancel $state(afterID)
-	}
-
-	foreach name [array names state] {
-	    unset state($name)
-	}
-	# FRINK: nocheck
-	unset $token
+        default {
+            error "unknown value for -close $options(-close)"
+        }
     }
+    set ecode $errorCode
+    set einfo $errorInfo
+
+    catch { close $state(sd) }
+
+    if {$state(afterID) != ""} {
+        catch { after cancel $state(afterID) }
+    }
+
+    foreach name [array names state] {
+        unset state($name)
+    }
+    # FRINK: nocheck
+    unset $token
+
+    return -code $code -errorinfo $einfo -errorcode $ecode $result
 }
 
 # ::smtp::winit --
@@ -993,7 +988,7 @@ proc ::smtp::winit {token part originator {mode MAIL}} {
     if {[info exists state(esmtp)] 
         && [lsearch -glob $state(esmtp) "SIZE*"] != -1} {
         catch {
-            set size [string length [$part serialize]]
+            set size [string length [mime::buildmessage $part]]
             append from " SIZE=$size"
         }
     }
@@ -1134,7 +1129,7 @@ proc ::smtp::wtextaux {token part} {
     if {$trf} {
         set code [catch { ::mime::copymessage $part $state(sd) } result]
     } else {
-        set code [catch {$part serialize} result]
+        set code [catch { ::mime::buildmessage $part } result]
         if {$code == 0} {
 	    # Detect and transform bare LF's into proper CR/LF
 	    # sequences.
@@ -1299,10 +1294,8 @@ proc ::smtp::talk {token secs command} {
         flush stderr
     }
 
-    if {[catch {
-	puts -nonewline $state(sd) $command\r\n
-	flush $state(sd) } result]
-    } {
+    if {[catch { puts -nonewline $state(sd) "$command\r\n"
+                 flush $state(sd) } result]} {
         return [list code 400 diagnostic $result]
     }
 
@@ -1331,10 +1324,10 @@ proc ::smtp::hear {token secs} {
 
     array set options $state(options)
 
-    array set response [list args {}]
+    array set response [list args ""]
 
     set firstP 1
-    while 1 {
+    while {1} {
         if {$secs >= 0} {
 	    ## SF [ 836442 ] timeout with large data
 	    ## correction, aotto 031105 -
@@ -1507,7 +1500,7 @@ proc ::smtp::boolean {value} {
 
 # -------------------------------------------------------------------------
 
-package provide smtp 1.5
+package provide smtp 1.4.5
 
 # -------------------------------------------------------------------------
 # Local variables:
