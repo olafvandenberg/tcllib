@@ -1130,25 +1130,35 @@ proc ::yaml::_imp_huddle2yaml {data {offset ""}} {
     variable _dumpIndent
     set nextoff "$offset[string repeat { } $_dumpIndent]"
     switch -- [huddle type $data] {
+        "str" -
+        "timestamp" -
+        "float" -
+        "int" -
+        "null" -
+        "true" -
+        "false" -
+        "binary" -
         "string" {
             set data [huddle get_stripped $data]
             return [_dumpScalar $data $offset]
         }
+        "sequence" -
         "list" {
             set inner {}
             set len [huddle llength $data]
             for {set i 0} {$i < $len} {incr i} {
                 set sub [huddle get $data $i]
-                set sep [expr {[huddle type $sub] eq "string" ? " " : "\n"}]
+                set sep [expr {[huddle is_container $sub] ? "\n" : " "}]
                 lappend inner [join [list $offset - $sep [_imp_huddle2yaml $sub $nextoff]] ""]
             }
             return [join $inner "\n"]
         }
+        "mapping" -
         "dict" {
             set inner {}
             foreach {key} [huddle keys $data] {
                 set sub [huddle get $data $key]
-                set sep [expr {[huddle type $sub] eq "string" ? " " : "\n"}]
+                set sep [expr {[huddle is_container $sub] ? "\n" : " "}]
                 lappend inner [join [list $offset $key: $sep [_imp_huddle2yaml $sub $nextoff]] ""]
             }
             return [join $inner "\n"]
